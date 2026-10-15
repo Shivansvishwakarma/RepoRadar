@@ -80,7 +80,7 @@ function validateGitHubUrl(value) {
 
 function App() {
   const [url, setUrl] = useState(
-    'https://github.com/tiangolo/fastapi',
+    '',
   )
   const [repository, setRepository] = useState(null)
   const [tree, setTree] = useState(null)
