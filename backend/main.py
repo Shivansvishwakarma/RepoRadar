@@ -32,13 +32,18 @@ MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_GEMINI_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_REQUESTS_PER_ANALYSIS = 12
 
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://repo-radar-hhl4.vercel.app",
+    ],
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
 
 
 class RepositoryRequest(BaseModel):
