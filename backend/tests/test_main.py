@@ -485,3 +485,46 @@ def test_analyze_repository_unexpected_ai_response():
     assert data["analysis_source"] == "fallback"
     assert data["analysis"]
     assert "repository" in data
+
+
+from backend.main import select_relevant_files
+
+
+def test_select_relevant_files_respects_max_limit():
+    paths = [
+        "README.md",
+        "pyproject.toml",
+        "src/app.py",
+        "src/services/user_service.py",
+        "src/models/user.py",
+        "tests/test_app.py",
+        "tests/test_users.py",
+        "src/database.py",
+        "src/utils.py",
+        "src/extra.py",
+    ]
+
+    selected = select_relevant_files(paths)
+
+    assert len(selected) <= 8
+    assert len(selected) == len(set(selected))
+
+
+def test_select_relevant_files_prioritizes_readme_and_config():
+    paths = [
+        "README.md",
+        "pyproject.toml",
+        "docs_src/examples/example.py",
+        "src/application.py",
+        "tests/test_application.py",
+    ]
+
+    selected = select_relevant_files(paths)
+
+    assert "README.md" in selected
+    assert "pyproject.toml" in selected
+    assert "src/application.py" in selected
+
+
+def test_select_relevant_files_handles_empty_tree():
+    assert select_relevant_files([]) == []

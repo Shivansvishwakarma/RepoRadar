@@ -1,5 +1,6 @@
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import './App.css'
 
 const API_BASE = '/api'
@@ -15,7 +16,11 @@ function formatDate(value) {
 
   return Number.isNaN(date.getTime())
     ? 'Unknown'
-    : date.toLocaleDateString()
+    : date.toLocaleDateString(undefined, {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
 }
 
 function getErrorMessage(data, fallback) {
@@ -38,6 +43,41 @@ async function readResponse(response) {
   }
 }
 
+function validateGitHubUrl(value) {
+  try {
+    const parsed = new URL(value)
+
+    if (
+      parsed.protocol !== 'https:' ||
+      !['github.com', 'www.github.com'].includes(
+        parsed.hostname.toLowerCase(),
+      )
+    ) {
+      return null
+    }
+
+    const parts = parsed.pathname.split('/').filter(Boolean)
+
+    if (parts.length !== 2) return null
+
+    const [owner, repository] = parts
+    const cleanRepository = repository.replace(/\.git$/i, '')
+
+    if (
+      !owner ||
+      !cleanRepository ||
+      owner.startsWith('-') ||
+      cleanRepository.startsWith('-')
+    ) {
+      return null
+    }
+
+    return `https://github.com/${owner}/${cleanRepository}`
+  } catch {
+    return null
+  }
+}
+
 function App() {
   const [url, setUrl] = useState(
     'https://github.com/tiangolo/fastapi',
@@ -49,27 +89,23 @@ function App() {
   const [search, setSearch] = useState('')
   const [showFiles, setShowFiles] = useState(true)
 
-  // AI analysis state
   const [aiAnalysis, setAiAnalysis] = useState(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState('')
-  const [aiReportVisible, setAiReportVisible] = useState(false)
+  const [aiReportVisible, setAiReportVisible] = useState(true)
+  const [copyStatus, setCopyStatus] = useState('')
 
   async function exploreRepository(event) {
     event.preventDefault()
 
-    const trimmedUrl = url.trim()
+    const cleanUrl = validateGitHubUrl(url.trim())
 
-    if (
-      !/^https?:\/\/github\.com\/[^/]+\/[^/]+\/?$/.test(trimmedUrl)
-    ) {
+    if (!cleanUrl) {
       setError(
-        'Enter a public GitHub repository URL, such as https://github.com/tiangolo/fastapi',
+        'Enter a valid public GitHub URL, such as https://github.com/tiangolo/fastapi',
       )
       return
     }
-
-    const cleanUrl = trimmedUrl.replace(/\/+$/, '')
 
     setLoading(true)
     setError('')
@@ -78,7 +114,7 @@ function App() {
     setSearch('')
     setAiAnalysis(null)
     setAiError('')
-    setAiReportVisible(false)
+    setCopyStatus('')
 
     try {
       const [repoResponse, treeResponse] = await Promise.all([
@@ -117,12 +153,13 @@ function App() {
         )
       }
 
+      setUrl(cleanUrl)
       setRepository(repoData)
       setTree(treeData)
     } catch (err) {
       setError(
         err instanceof TypeError
-          ? 'Cannot connect to the backend. Make sure FastAPI is running at http://127.0.0.1:8000.'
+          ? 'Cannot connect to the backend. Make sure FastAPI is running and the frontend proxy is configured.'
           : err.message ||
               'Something went wrong while exploring the repository.',
       )
@@ -134,22 +171,21 @@ function App() {
   async function analyzeRepository() {
     if (!repository || aiLoading) return
 
+    const startedAt = performance.now()
+
     setAiLoading(true)
     setAiError('')
     setAiAnalysis(null)
-    setAiReportVisible(false)
+    setCopyStatus('')
 
     try {
-      const response = await fetch(
-        `${API_BASE}/repository/analyze`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: repository.url || url.trim().replace(/\/+$/, ''),
-          }),
-        },
-      )
+      const response = await fetch(`${API_BASE}/repository/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: repository.url || url,
+        }),
+      })
 
       const data = await readResponse(response)
 
@@ -167,18 +203,36 @@ function App() {
         !data.analysis.trim()
       ) {
         throw new Error(
-          'The AI response did not contain a readable analysis. Check the backend response format.',
+          'The server returned an empty analysis. Check the backend response.',
         )
       }
 
-      setAiAnalysis(data)
+      const filesAnalyzed = Array.isArray(data.files_analyzed)
+        ? data.files_analyzed
+            .map((file) =>
+              typeof file === 'string' ? file : file?.path,
+            )
+            .filter(
+              (file) =>
+                typeof file === 'string' && file.trim().length > 0,
+            )
+        : []
+
+      setAiAnalysis({
+        ...data,
+        files_analyzed: filesAnalyzed,
+        duration_seconds: Number(
+          ((performance.now() - startedAt) / 1000).toFixed(2),
+        ),
+      })
+
       setAiReportVisible(true)
     } catch (err) {
       setAiError(
         err instanceof TypeError
           ? 'Cannot connect to the backend. Check that FastAPI is running.'
           : err.message ||
-              'Something went wrong during AI analysis.',
+              'Something went wrong during analysis.',
       )
     } finally {
       setAiLoading(false)
@@ -187,66 +241,138 @@ function App() {
 
   const items = Array.isArray(tree?.items) ? tree.items : []
 
-  const filteredItems = items.filter((item) =>
-    String(item.path ?? '')
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  )
+  const filteredItems = useMemo(() => {
+    const query = search.trim().toLowerCase()
 
-  const folders = filteredItems.filter(
+    return items.filter((item) => {
+      const matchesSearch = String(item.path ?? '')
+        .toLowerCase()
+        .includes(query)
+
+      const matchesType = showFiles || item.type === 'tree'
+
+      return matchesSearch && matchesType
+    })
+  }, [items, search, showFiles])
+
+  const folderCount = items.filter(
     (item) => item.type === 'tree',
-  )
+  ).length
 
-  const visibleItems = showFiles
-    ? filteredItems
-    : folders
+  const fileCount = items.length - folderCount
+
+  const isFallback = aiAnalysis?.analysis_source === 'fallback'
+
+  async function copyReport() {
+    if (!aiAnalysis?.analysis) return
+
+    try {
+      await navigator.clipboard.writeText(aiAnalysis.analysis)
+      setCopyStatus('Report copied')
+    } catch {
+      setCopyStatus('Copy unavailable in this browser')
+    }
+
+    window.setTimeout(() => setCopyStatus(''), 2500)
+  }
+
+  function downloadReport() {
+    if (!aiAnalysis?.analysis) return
+
+    const content = [
+      `# ${aiAnalysis.repository || repository?.full_name || 'Repository Analysis'}`,
+      '',
+      `Branch: ${aiAnalysis.branch || 'Unknown'}`,
+      `Analysis mode: ${isFallback ? 'Fallback' : 'AI'}`,
+      `Files analyzed: ${(aiAnalysis.files_analyzed || []).length}`,
+      `Analysis duration: ${aiAnalysis.duration_seconds ?? 'Unknown'} seconds`,
+      '',
+      aiAnalysis.analysis,
+    ].join('\n')
+
+    const blob = new Blob([content], {
+      type: 'text/markdown;charset=utf-8',
+    })
+
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+
+    link.href = objectUrl
+    link.download = 'reporadar-analysis.md'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
+  }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" id="home">
       <header className="topbar">
-        <a
-          className="brand"
-          href="#home"
-          aria-label="RepoRadar home"
-        >
+        <a className="brand" href="#home" aria-label="RepoRadar home">
           <span className="brand-mark">R</span>
           <span>
             Repo<span className="brand-accent">Radar</span>
           </span>
         </a>
 
-        <span className="topbar-label">
-          <span className="status-dot" />
-          GitHub repository explorer
-        </span>
+        <div className="topbar-right">
+          <span className="topbar-label">
+            <span className="status-dot" />
+            GitHub repository explorer
+          </span>
+          <span className="version-label">BETA</span>
+        </div>
       </header>
 
-      <section className="hero-section" id="home">
-        <div className="eyebrow">
-          <span className="eyebrow-icon">✳</span>
-          UNDERSTAND REPOSITORIES FASTER
+      <section className="hero-section">
+        <div className="hero-grid">
+          <div className="hero-copy">
+            <div className="eyebrow">
+              <span className="eyebrow-icon">✳</span>
+              YOUR CODEBASE, DECODED
+            </div>
+
+            <h1>
+              Less guessing.
+              <br />
+              <span className="gradient-text">
+                More understanding.
+              </span>
+            </h1>
+
+            <p className="hero-description">
+              Explore repository structure, identify key technologies,
+              and get a developer-friendly guide to unfamiliar code.
+            </p>
+
+            <div className="hero-points">
+              <span><span>✓</span> Repository insights</span>
+              <span><span>✓</span> File explorer</span>
+              <span><span>✓</span> AI-assisted reports</span>
+            </div>
+          </div>
+
+          <div className="hero-visual" aria-hidden="true">
+            <div className="visual-orbit orbit-one" />
+            <div className="visual-orbit orbit-two" />
+            <div className="visual-core">
+              <span className="visual-symbol">R</span>
+              <span className="visual-core-label">REPO RADAR</span>
+            </div>
+            <div className="floating-chip chip-top">
+              <span className="chip-dot purple" /> Source code
+            </div>
+            <div className="floating-chip chip-right">
+              <span className="chip-dot green" /> Structure mapped
+            </div>
+            <div className="floating-chip chip-bottom">
+              <span className="chip-dot blue" /> Insights ready
+            </div>
+          </div>
         </div>
 
-        <h1>
-          Every repository.
-          <br />
-          <span className="gradient-text">
-            A clearer picture.
-          </span>
-        </h1>
-
-        <p className="hero-description">
-          Explore project structure, discover technologies, and get
-          a clearer view of any public GitHub repository.
-        </p>
-
-        <form
-          className="search-form"
-          onSubmit={exploreRepository}
-        >
-          <span className="search-icon" aria-hidden="true">
-            ⌕
-          </span>
+        <form className="search-form" onSubmit={exploreRepository}>
+          <span className="search-icon" aria-hidden="true">⌕</span>
 
           <input
             type="url"
@@ -258,36 +384,43 @@ function App() {
           />
 
           <button type="submit" disabled={loading}>
-            {loading ? 'Exploring…' : 'Explore repository'}
-            {!loading && (
-              <span aria-hidden="true"> ↗</span>
+            {loading ? (
+              <>
+                <span className="button-spinner" />
+                Exploring…
+              </>
+            ) : (
+              <>Explore repository <span aria-hidden="true">↗</span></>
             )}
           </button>
         </form>
 
-        <p className="form-hint">
-          <span>↳</span> Start with any public GitHub repository
-        </p>
+        <div className="form-bottom-row">
+          <p className="form-hint">
+            <span>↳</span> Works with public GitHub repositories
+          </p>
+          <span className="privacy-note">
+            <span>⌑</span> No code execution
+          </span>
+        </div>
 
         {error && (
           <div className="error-message" role="alert">
-            <strong>Something went wrong</strong>
-            <span>{error}</span>
+            <span className="message-icon">!</span>
+            <div>
+              <strong>Could not explore repository</strong>
+              <p>{error}</p>
+            </div>
           </div>
         )}
       </section>
 
       {loading && (
-        <section
-          className="loading-panel"
-          aria-live="polite"
-        >
+        <section className="loading-panel" aria-live="polite">
           <span className="spinner" />
           <div>
-            <strong>Mapping your repository…</strong>
-            <p>
-              Fetching repository details and file structure.
-            </p>
+            <strong>Mapping your repository</strong>
+            <p>Fetching metadata and building the file tree…</p>
           </div>
         </section>
       )}
@@ -296,28 +429,27 @@ function App() {
         <section className="results-section">
           <div className="section-heading">
             <div>
-              <div className="section-kicker">
-                REPOSITORY OVERVIEW
-              </div>
-              <h2>Your repository at a glance</h2>
+              <div className="section-kicker">01 / REPOSITORY OVERVIEW</div>
+              <h2>Start with the big picture</h2>
+              <p className="section-subtitle">
+                The essentials of your repository, all in one place.
+              </p>
             </div>
 
             <a
-              className="github-link"
+              className="secondary-button"
               href={repository.url || url}
               target="_blank"
               rel="noreferrer"
             >
-              View on GitHub ↗
+              View on GitHub <span aria-hidden="true">↗</span>
             </a>
           </div>
 
           <article className="repo-card">
             <div className="repo-card-top">
               <div className="repo-avatar">
-                {(repository.name || 'R')
-                  .slice(0, 1)
-                  .toUpperCase()}
+                {(repository.name || 'R').slice(0, 1).toUpperCase()}
               </div>
 
               <div className="repo-title">
@@ -328,7 +460,6 @@ function App() {
                 >
                   {repository.full_name || repository.name}
                 </a>
-
                 <span className="visibility-label">
                   <span className="status-dot" />
                   Public repository
@@ -343,154 +474,137 @@ function App() {
 
             <p className="repo-description">
               {repository.description ||
-                'No description provided.'}
+                'No description provided by the repository owner.'}
             </p>
 
             <div className="stats-grid">
               <div className="stat">
-                <span className="stat-label">Stars</span>
-                <strong>
-                  ☆ {formatNumber(repository.stars)}
-                </strong>
+                <span className="stat-icon">☆</span>
+                <div>
+                  <span className="stat-label">Stars</span>
+                  <strong>{formatNumber(repository.stars)}</strong>
+                </div>
               </div>
 
               <div className="stat">
-                <span className="stat-label">Forks</span>
-                <strong>
-                  ⑂ {formatNumber(repository.forks)}
-                </strong>
+                <span className="stat-icon">⑂</span>
+                <div>
+                  <span className="stat-label">Forks</span>
+                  <strong>{formatNumber(repository.forks)}</strong>
+                </div>
               </div>
 
               <div className="stat">
-                <span className="stat-label">
-                  Default branch
-                </span>
-                <strong>
-                  ⌁{' '}
-                  {repository.default_branch ||
-                    tree.branch ||
-                    'Unknown'}
-                </strong>
+                <span className="stat-icon">⌁</span>
+                <div>
+                  <span className="stat-label">Default branch</span>
+                  <strong className="stat-value-small">
+                    {repository.default_branch || tree.branch || 'Unknown'}
+                  </strong>
+                </div>
               </div>
 
               <div className="stat">
-                <span className="stat-label">
-                  Last updated
-                </span>
-                <strong>
-                  {formatDate(repository.updated_at)}
-                </strong>
+                <span className="stat-icon">◷</span>
+                <div>
+                  <span className="stat-label">Last updated</span>
+                  <strong className="stat-value-small">
+                    {formatDate(repository.updated_at)}
+                  </strong>
+                </div>
               </div>
             </div>
           </article>
 
           <div className="section-heading tree-heading">
             <div>
-              <div className="section-kicker">
-                SOURCE EXPLORER
-              </div>
-              <h2>Explore the file structure</h2>
+              <div className="section-kicker">02 / SOURCE EXPLORER</div>
+              <h2>Find your way around</h2>
+              <p className="section-subtitle">
+                Search paths and see how the project is organized.
+              </p>
             </div>
-
             <span className="item-count">
-              {formatNumber(
-                tree.total_items ?? items.length,
-              )}{' '}
-              items
+              {formatNumber(tree.total_items ?? items.length)} items
             </span>
           </div>
 
           <article className="tree-card">
             <div className="tree-toolbar">
-              <div className="tree-tabs">
+              <div className="tree-tabs" role="group" aria-label="Filter item type">
                 <button
                   type="button"
-                  className={
-                    showFiles
-                      ? 'tree-tab active'
-                      : 'tree-tab'
-                  }
+                  className={showFiles ? 'tree-tab active' : 'tree-tab'}
                   onClick={() => setShowFiles(true)}
                 >
-                  All items{' '}
-                  <span>{formatNumber(items.length)}</span>
+                  All items <span>{formatNumber(items.length)}</span>
                 </button>
 
                 <button
                   type="button"
-                  className={
-                    !showFiles
-                      ? 'tree-tab active'
-                      : 'tree-tab'
-                  }
+                  className={!showFiles ? 'tree-tab active' : 'tree-tab'}
                   onClick={() => setShowFiles(false)}
                 >
-                  Folders{' '}
-                  <span>
-                    {formatNumber(
-                      items.filter(
-                        (item) => item.type === 'tree',
-                      ).length,
-                    )}
-                  </span>
+                  Folders <span>{formatNumber(folderCount)}</span>
                 </button>
               </div>
 
-              <input
-                className="tree-search"
-                type="search"
-                value={search}
-                onChange={(event) =>
-                  setSearch(event.target.value)
-                }
-                placeholder="Filter paths…"
-                aria-label="Filter repository paths"
-              />
+              <label className="tree-search-wrap">
+                <span aria-hidden="true">⌕</span>
+                <input
+                  className="tree-search"
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search file paths…"
+                  aria-label="Filter repository paths"
+                />
+                {search && (
+                  <button
+                    type="button"
+                    className="clear-search"
+                    onClick={() => setSearch('')}
+                    aria-label="Clear search"
+                  >
+                    ×
+                  </button>
+                )}
+              </label>
             </div>
 
             <div className="tree-summary">
               <span className="branch-label">
-                ⌁{' '}
-                {tree.branch ||
-                  repository.default_branch ||
-                  'Default branch'}
+                <span aria-hidden="true">⌁</span>
+                {tree.branch || repository.default_branch || 'Default branch'}
               </span>
-
               <span>
-                {tree.truncated
-                  ? 'Showing a partial tree'
-                  : 'Tree retrieved successfully'}
+                {tree.truncated ? 'Partial file tree' : 'File tree loaded'}
+              </span>
+              <span>
+                {formatNumber(fileCount)} files · {formatNumber(folderCount)} folders
               </span>
             </div>
 
             <div className="file-list">
-              {visibleItems.map((item, index) => {
+              {filteredItems.map((item) => {
                 const isFolder = item.type === 'tree'
+                const extension =
+                  !isFolder && item.path.includes('.')
+                    ? item.path.split('.').pop().toUpperCase()
+                    : ''
 
                 return (
-                  <div
-                    className="file-row"
-                    key={`${item.path}-${index}`}
-                  >
-                    <span
-                      className={
-                        isFolder
-                          ? 'file-icon folder-icon'
-                          : 'file-icon'
-                      }
-                    >
+                  <div className="file-row" key={item.path}>
+                    <span className={isFolder ? 'file-icon folder-icon' : 'file-icon'}>
                       {isFolder ? '▰' : '▤'}
                     </span>
 
-                    <span
-                      className="file-path"
-                      title={item.path}
-                    >
+                    <span className="file-path" title={item.path}>
                       {item.path}
                     </span>
 
                     <span className="file-type">
-                      {isFolder ? 'Folder' : 'File'}
+                      {isFolder ? 'Folder' : extension || 'File'}
                     </span>
 
                     <span className="file-size">
@@ -502,139 +616,245 @@ function App() {
                 )
               })}
 
-              {visibleItems.length === 0 && (
+              {filteredItems.length === 0 && (
                 <div className="empty-state">
-                  No matching items. Try a different search.
+                  <span className="empty-state-icon">⌕</span>
+                  <strong>No matching paths</strong>
+                  <p>Try another search term or clear the search.</p>
+                  {search && (
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() => setSearch('')}
+                    >
+                      Clear search
+                    </button>
+                  )}
                 </div>
               )}
             </div>
 
             {tree.truncated && (
               <p className="tree-note">
-                GitHub returned a truncated tree. Some files
-                may not be shown.
+                GitHub returned a truncated tree. Some repository items may not be shown.
               </p>
             )}
           </article>
 
-          {/* AI analysis section */}
           <section className="ai-section">
             <div className="section-heading">
               <div>
-                <div className="section-kicker">
-                  AI-POWERED ANALYSIS
-                </div>
+                <div className="section-kicker">03 / AI CODE GUIDE</div>
                 <h2>Understand the codebase</h2>
+                <p className="section-subtitle">
+                  Turn selected repository files into a practical developer guide.
+                </p>
               </div>
 
               <button
                 type="button"
-                className="ai-analyze-button"
+                className="primary-button ai-analyze-button"
                 onClick={analyzeRepository}
                 disabled={aiLoading}
               >
-                {aiLoading
-                  ? 'Analyzing…'
-                  : aiAnalysis
-                    ? 'Analyze again'
-                    : '✳ Analyze with AI'}
+                {aiLoading ? (
+                  <>
+                    <span className="button-spinner" />
+                    Analyzing…
+                  </>
+                ) : (
+                  <>{aiAnalysis ? '↻ Analyze again' : '✳ Analyze with AI'}</>
+                )}
               </button>
             </div>
 
-            <p className="ai-description">
-              Get a beginner-friendly explanation of the project,
-              its technologies, important files, and possible
-              improvements.
-            </p>
+            <div className="ai-feature-row">
+              <div className="ai-feature">
+                <span className="ai-feature-icon">⌘</span>
+                <div>
+                  <strong>Architecture</strong>
+                  <span>Understand key components</span>
+                </div>
+              </div>
+              <div className="ai-feature">
+                <span className="ai-feature-icon">⌁</span>
+                <div>
+                  <strong>Technologies</strong>
+                  <span>Identify tools and frameworks</span>
+                </div>
+              </div>
+              <div className="ai-feature">
+                <span className="ai-feature-icon">↗</span>
+                <div>
+                  <strong>Next steps</strong>
+                  <span>Find practical improvements</span>
+                </div>
+              </div>
+            </div>
 
             {aiLoading && (
-              <div
-                className="ai-status"
-                aria-live="polite"
-              >
+              <div className="ai-status" aria-live="polite">
                 <span className="spinner" />
                 <div>
-                  <strong>
-                    Analyzing your repository…
-                  </strong>
-                  <p>This may take a little while.</p>
+                  <strong>Reading repository context…</strong>
+                  <p>
+                    Retrieving relevant files and preparing your report. This can take a little while.
+                  </p>
                 </div>
               </div>
             )}
 
             {aiError && (
               <div className="error-message" role="alert">
-                <strong>Analysis failed</strong>
-                <span>{aiError}</span>
+                <span className="message-icon">!</span>
+                <div>
+                  <strong>Analysis failed</strong>
+                  <p>{aiError}</p>
+                </div>
               </div>
             )}
 
-            {aiAnalysis && aiReportVisible && (
-              <article className="ai-report">
-                <div className="ai-report-header">
-                  <div>
-                    <div className="section-kicker">
-                      ANALYSIS REPORT
-                    </div>
-                    <h3>
-                      {aiAnalysis.repository ||
-                        repository.full_name}
-                    </h3>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="report-toggle"
-                    onClick={() =>
-                      setAiReportVisible(false)
-                    }
-                  >
-                    Hide report
-                  </button>
+            {!aiAnalysis && !aiLoading && !aiError && (
+              <div className="analysis-empty">
+                <div className="empty-orbit">
+                  <span>✳</span>
                 </div>
-
-                <p className="ai-report-meta">
-                  Branch: {aiAnalysis.branch || 'Unknown'} ·{' '}
-                  {Array.isArray(aiAnalysis.files_analyzed)
-                    ? aiAnalysis.files_analyzed.length
-                    : 0}{' '}
-                  files analyzed
+                <h3>Your codebase guide starts here</h3>
+                <p>
+                  Run an analysis to get an overview, important file paths,
+                  code-quality observations, and suggested next steps.
                 </p>
-
-                {Array.isArray(
-                  aiAnalysis.files_analyzed,
-                ) &&
-                  aiAnalysis.files_analyzed.length > 0 && (
-                    <details className="analyzed-files">
-                      <summary>View files analyzed</summary>
-                      <ul>
-                        {aiAnalysis.files_analyzed.map(
-                          (path) => (
-                            <li key={path}>
-                              <code>{path}</code>
-                            </li>
-                          ),
-                        )}
-                      </ul>
-                    </details>
-                  )}
-
-                <div className="ai-report-content">
-                  {aiAnalysis.analysis}
-                </div>
-              </article>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={analyzeRepository}
+                >
+                  Generate repository guide <span>↗</span>
+                </button>
+              </div>
             )}
 
-            {aiAnalysis && !aiReportVisible && (
-              <button
-                type="button"
-                className="report-toggle"
-                onClick={() =>
-                  setAiReportVisible(true)
-                }
-              >
-                Show report
-              </button>
+            {aiAnalysis && (
+              <article className="ai-report">
+                <div className="ai-report-header">
+                  <div className="report-heading-main">
+                    <div className="report-icon">✳</div>
+                    <div>
+                      <div className="section-kicker">REPOSITORY REPORT</div>
+                      <h3>{aiAnalysis.repository || repository.full_name}</h3>
+                    </div>
+                  </div>
+
+                  <span className={isFallback ? 'source-badge fallback-badge' : 'source-badge ai-badge'}>
+                    <span className="source-dot" />
+                    {isFallback ? 'Fallback analysis' : 'AI analysis'}
+                  </span>
+                </div>
+
+                {isFallback && (
+                  <div className="report-notice">
+                    <strong>AI service unavailable</strong>
+                    <p>
+                      This report was generated by RepoRadar’s rule-based fallback.
+                      Treat it as a starting point, not as a complete AI code review.
+                    </p>
+                  </div>
+                )}
+
+                <div className="report-metrics">
+                  <div>
+                    <span>Branch</span>
+                    <strong>{aiAnalysis.branch || 'Unknown'}</strong>
+                  </div>
+                  <div>
+                    <span>Files retrieved</span>
+                    <strong>{aiAnalysis.files_analyzed.length}</strong>
+                  </div>
+                  <div>
+                    <span>Report type</span>
+                    <strong>{isFallback ? 'Rule-based' : 'Generated'}</strong>
+                  </div>
+                  <div>
+                    <span>Duration</span>
+                    <strong>
+                      {aiAnalysis.duration_seconds != null
+                        ? `${aiAnalysis.duration_seconds}s`
+                        : 'Unknown'}
+                    </strong>
+                  </div>
+                </div>
+
+                {aiAnalysis.files_analyzed.length > 0 ? (
+                  <details className="analyzed-files">
+                    <summary>
+                      <span>Files included in this analysis</span>
+                      <span className="details-count">
+                        {aiAnalysis.files_analyzed.length}
+                      </span>
+                    </summary>
+                    <ul>
+                      {aiAnalysis.files_analyzed.map((path) => (
+                        <li key={path}>
+                          <code
+                            style={{
+                              color: 'var(--text-primary, #e5e7eb)',
+                              fontSize: '13px',
+                              visibility: 'visible',
+                              overflowWrap: 'anywhere',
+                            }}
+                          >
+                            {path}
+                          </code>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : (
+                  <div className="report-notice">
+                    <strong>No source files were confirmed as retrieved</strong>
+                    <p>
+                      The report may rely mainly on repository metadata and file-tree information.
+                    </p>
+                  </div>
+                )}
+
+                <div className="ai-report-toolbar">
+                  <span className="report-reading-label">REPORT CONTENT</span>
+                  <div>
+                    <button
+                      type="button"
+                      className="report-action"
+                      onClick={copyReport}
+                    >
+                      {copyStatus === 'Report copied' ? '✓ Copied' : 'Copy report'}
+                    </button>
+                    <button
+                      type="button"
+                      className="report-action"
+                      onClick={downloadReport}
+                    >
+                      ↓ Export Markdown
+                    </button>
+                    <button
+                      type="button"
+                      className="report-action"
+                      onClick={() => setAiReportVisible((visible) => !visible)}
+                    >
+                      {aiReportVisible ? 'Hide report' : 'Show report'}
+                    </button>
+                  </div>
+                </div>
+
+                {copyStatus && copyStatus !== 'Report copied' && (
+                  <p className="copy-status" role="status">{copyStatus}</p>
+                )}
+
+                {aiReportVisible && (
+                  <div className="ai-report-content">
+                    <ReactMarkdown>{aiAnalysis.analysis}</ReactMarkdown>
+                  </div>
+                )}
+              </article>
             )}
           </section>
         </section>
@@ -642,12 +862,11 @@ function App() {
 
       <footer className="footer">
         <a className="footer-brand" href="#home">
+          <span className="brand-mark footer-mark">R</span>
           RepoRadar
         </a>
-        <span>
-          Understand the codebase before you dive in.
-        </span>
-        <span>Built for developers · 2026</span>
+        <span>Understand the codebase before you dive in.</span>
+        <span className="footer-note">Built for developers · 2026</span>
       </footer>
     </main>
   )
