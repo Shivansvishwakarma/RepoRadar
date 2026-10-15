@@ -421,6 +421,23 @@ async def analyze_repository(request: RepositoryRequest):
             selected_paths = list(
                 dict.fromkeys(priority_files + code_files)
             )[:8]
+            
+            if not selected_paths:
+                analysis = generate_fallback_analysis(
+                repo_data,
+                branch,
+                file_paths,
+                [],
+                "No readable source or configuration files were found."
+            )
+
+                return {
+                    "repository": repo_data.get("full_name"),
+                    "branch": branch,
+                    "files_analyzed": [],
+                    "analysis": analysis,
+                    "analysis_source": "fallback",
+                }
 
             # 4. Download a small selection of files
             file_contents = []

@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib import response
 
 from fastapi.testclient import TestClient
 from backend.main import app
@@ -323,10 +324,12 @@ def test_analyze_repository_no_readable_files():
             json={"url": "https://github.com/testuser/empty-repo"},
         )
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == (
-        "No readable source or configuration files found."
-    )
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["analysis_source"] == "fallback"
+    assert data["files_analyzed"] == []
+    assert data["analysis"]
     mock_client.post.assert_not_called()
 
 def test_analyze_repository_gemini_failure():
@@ -373,11 +376,11 @@ def test_analyze_repository_gemini_failure():
             json={"url": "https://github.com/testuser/test-repo"},
         )
 
-    assert response.status_code == 502
-    assert response.json()["detail"] == (
-        "Gemini could not generate the report. "
-        "Check the backend terminal for details."
-    )
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["analysis_source"] == "fallback"
+    assert data["analysis"]
     assert mock_client.post.await_count == 3
 
 
@@ -425,10 +428,14 @@ def test_analyze_repository_network_error():
             json={"url": "https://github.com/testuser/test-repo"},
         )
 
-    assert response.status_code == 502
-    assert response.json()["detail"] == (
-        "A network error occurred while analyzing the repository."
-    )
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["analysis_source"] == "fallback"
+    assert data["analysis"]
+    assert mock_client.post.await_count == 3
+
+
 def test_analyze_repository_unexpected_ai_response():
     repo_response = MagicMock()
     repo_response.status_code = 200
@@ -472,7 +479,9 @@ def test_analyze_repository_unexpected_ai_response():
             json={"url": "https://github.com/testuser/test-repo"},
         )
 
-    assert response.status_code == 502
-    assert response.json()["detail"] == (
-        "The AI provider returned an unexpected response."
-    )
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["analysis_source"] == "fallback"
+    assert data["analysis"]
+    assert "repository" in data
