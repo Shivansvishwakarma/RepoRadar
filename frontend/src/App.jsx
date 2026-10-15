@@ -137,19 +137,13 @@ function App() {
 
       if (!repoResponse.ok) {
         throw new Error(
-          getErrorMessage(
-            repoData,
-            'Could not load repository details.',
-          ),
+          getErrorMessage(repoData, 'Could not load repository details.'),
         )
       }
 
       if (!treeResponse.ok) {
         throw new Error(
-          getErrorMessage(
-            treeData,
-            'Could not load the repository file tree.',
-          ),
+          getErrorMessage(treeData, 'Could not load the repository file tree.'),
         )
       }
 
@@ -160,8 +154,7 @@ function App() {
       setError(
         err instanceof TypeError
           ? 'Cannot connect to the backend. Make sure FastAPI is running and the frontend proxy is configured.'
-          : err.message ||
-              'Something went wrong while exploring the repository.',
+          : err.message || 'Something went wrong while exploring the repository.',
       )
     } finally {
       setLoading(false)
@@ -191,10 +184,7 @@ function App() {
 
       if (!response.ok) {
         throw new Error(
-          getErrorMessage(
-            data,
-            'Could not analyze this repository.',
-          ),
+          getErrorMessage(data, 'Could not analyze this repository.'),
         )
       }
 
@@ -231,8 +221,7 @@ function App() {
       setAiError(
         err instanceof TypeError
           ? 'Cannot connect to the backend. Check that FastAPI is running.'
-          : err.message ||
-              'Something went wrong during analysis.',
+          : err.message || 'Something went wrong during analysis.',
       )
     } finally {
       setAiLoading(false)
@@ -284,8 +273,15 @@ function App() {
       '',
       `Branch: ${aiAnalysis.branch || 'Unknown'}`,
       `Analysis mode: ${isFallback ? 'Fallback' : 'AI'}`,
-      `Files analyzed: ${(aiAnalysis.files_analyzed || []).length}`,
+      `Files analyzed: ${aiAnalysis.files_analyzed.length}`,
       `Analysis duration: ${aiAnalysis.duration_seconds ?? 'Unknown'} seconds`,
+      '',
+      '## Files included',
+      ...(aiAnalysis.files_analyzed.length
+        ? aiAnalysis.files_analyzed.map((path) => `- ${path}`)
+        : ['- No source files confirmed']),
+      '',
+      '## Analysis',
       '',
       aiAnalysis.analysis,
     ].join('\n')
@@ -302,7 +298,8 @@ function App() {
     document.body.appendChild(link)
     link.click()
     link.remove()
-    URL.revokeObjectURL(objectUrl)
+
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
   }
 
   return (
@@ -310,9 +307,7 @@ function App() {
       <header className="topbar">
         <a className="brand" href="#home" aria-label="RepoRadar home">
           <span className="brand-mark">R</span>
-          <span>
-            Repo<span className="brand-accent">Radar</span>
-          </span>
+          <span>Repo<span className="brand-accent">Radar</span></span>
         </a>
 
         <div className="topbar-right">
@@ -335,9 +330,7 @@ function App() {
             <h1>
               Less guessing.
               <br />
-              <span className="gradient-text">
-                More understanding.
-              </span>
+              <span className="gradient-text">More understanding.</span>
             </h1>
 
             <p className="hero-description">
@@ -373,7 +366,6 @@ function App() {
 
         <form className="search-form" onSubmit={exploreRepository}>
           <span className="search-icon" aria-hidden="true">⌕</span>
-
           <input
             type="url"
             value={url}
@@ -382,7 +374,6 @@ function App() {
             aria-label="GitHub repository URL"
             required
           />
-
           <button type="submit" disabled={loading}>
             {loading ? (
               <>
@@ -429,7 +420,6 @@ function App() {
         <section className="results-section">
           <div className="section-heading">
             <div>
-              <div className="section-kicker">01 / REPOSITORY OVERVIEW</div>
               <h2>Start with the big picture</h2>
               <p className="section-subtitle">
                 The essentials of your repository, all in one place.
@@ -518,7 +508,6 @@ function App() {
 
           <div className="section-heading tree-heading">
             <div>
-              <div className="section-kicker">02 / SOURCE EXPLORER</div>
               <h2>Find your way around</h2>
               <p className="section-subtitle">
                 Search paths and see how the project is organized.
@@ -577,9 +566,7 @@ function App() {
                 <span aria-hidden="true">⌁</span>
                 {tree.branch || repository.default_branch || 'Default branch'}
               </span>
-              <span>
-                {tree.truncated ? 'Partial file tree' : 'File tree loaded'}
-              </span>
+              <span>{tree.truncated ? 'Partial file tree' : 'File tree loaded'}</span>
               <span>
                 {formatNumber(fileCount)} files · {formatNumber(folderCount)} folders
               </span>
@@ -589,7 +576,7 @@ function App() {
               {filteredItems.map((item) => {
                 const isFolder = item.type === 'tree'
                 const extension =
-                  !isFolder && item.path.includes('.')
+                  !isFolder && item.path?.includes('.')
                     ? item.path.split('.').pop().toUpperCase()
                     : ''
 
@@ -598,15 +585,12 @@ function App() {
                     <span className={isFolder ? 'file-icon folder-icon' : 'file-icon'}>
                       {isFolder ? '▰' : '▤'}
                     </span>
-
                     <span className="file-path" title={item.path}>
                       {item.path}
                     </span>
-
                     <span className="file-type">
                       {isFolder ? 'Folder' : extension || 'File'}
                     </span>
-
                     <span className="file-size">
                       {!isFolder && item.size != null
                         ? `${formatNumber(item.size)} B`
@@ -644,7 +628,6 @@ function App() {
           <section className="ai-section">
             <div className="section-heading">
               <div>
-                <div className="section-kicker">03 / AI CODE GUIDE</div>
                 <h2>Understand the codebase</h2>
                 <p className="section-subtitle">
                   Turn selected repository files into a practical developer guide.
@@ -698,7 +681,8 @@ function App() {
                 <div>
                   <strong>Reading repository context…</strong>
                   <p>
-                    Retrieving relevant files and preparing your report. This can take a little while.
+                    Retrieving relevant files and preparing your report.
+                    This can take a little while.
                   </p>
                 </div>
               </div>
@@ -716,9 +700,7 @@ function App() {
 
             {!aiAnalysis && !aiLoading && !aiError && (
               <div className="analysis-empty">
-                <div className="empty-orbit">
-                  <span>✳</span>
-                </div>
+                <div className="empty-orbit"><span>✳</span></div>
                 <h3>Your codebase guide starts here</h3>
                 <p>
                   Run an analysis to get an overview, important file paths,
@@ -793,18 +775,9 @@ function App() {
                       </span>
                     </summary>
                     <ul>
-                      {aiAnalysis.files_analyzed.map((path) => (
-                        <li key={path}>
-                          <code
-                            style={{
-                              color: 'var(--text-primary, #e5e7eb)',
-                              fontSize: '13px',
-                              visibility: 'visible',
-                              overflowWrap: 'anywhere',
-                            }}
-                          >
-                            {path}
-                          </code>
+                      {aiAnalysis.files_analyzed.map((path, index) => (
+                        <li key={`${path}-${index}`}>
+                          <code>{path}</code>
                         </li>
                       ))}
                     </ul>
