@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import './App.css'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
+const API_BASE = `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/api`
 
 function formatNumber(value) {
   return Number(value ?? 0).toLocaleString()
