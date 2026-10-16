@@ -5,6 +5,7 @@ import random
 import re
 import traceback
 from pathlib import Path
+from urllib import response
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -1076,9 +1077,21 @@ claim with evidence. Do not omit sections or end mid-sentence.
                 if response.status_code == 200:
                     break
 
+                
                 if response.status_code == 429:
-                    print("Gemini quota/rate limit reached.")
+                    print("Gemini returned HTTP 429: quota or rate limit reached.")
+
+                    try:
+                        error_data = response.json()
+                        print(
+                            "Gemini error details:",
+                            json.dumps(error_data.get("error", {}), indent=2)
+                        )
+                    except (ValueError, json.JSONDecodeError):
+                        print("Could not parse Gemini error details.")
+
                     break
+
 
                 print("Gemini HTTP status:", response.status_code)
 
